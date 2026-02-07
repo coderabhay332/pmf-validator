@@ -38,9 +38,13 @@ export class BrowserUseClient {
      * Create a new task
      * POST /tasks
      */
-    async createTask(taskDescription: string): Promise<Task> {
+    async createTask(taskDescription: string, webhookUrl?: string): Promise<Task> {
         try {
-            const response = await this.client.post('/tasks', { task: taskDescription });
+            const payload: any = { task: taskDescription };
+            if (webhookUrl) {
+                payload.webhook_url = webhookUrl;
+            }
+            const response = await this.client.post('/tasks', payload);
             return response.data;
         } catch (error) {
             this.handleError(error);
