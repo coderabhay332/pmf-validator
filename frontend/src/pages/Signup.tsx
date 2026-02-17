@@ -25,43 +25,53 @@ export default function Signup() {
     };
 
     return (
-        <div className="flex items-center justify-center min-h-screen bg-gray-100">
-            <div className="w-full max-w-md p-8 bg-white rounded-lg shadow-md">
-                <h2 className="mb-6 text-3xl font-bold text-center text-gray-800">Sign Up</h2>
-                {error && <div className="p-3 mb-4 text-sm text-red-500 bg-red-100 rounded">{error}</div>}
-                <form onSubmit={handleSignup}>
-                    <div className="mb-4">
-                        <label className="block mb-2 text-sm font-bold text-gray-700" htmlFor="email">
+
+        <div className="flex items-center justify-center min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900">
+            <div className="w-full max-w-md p-8 bg-white/95 backdrop-blur-sm rounded-2xl shadow-2xl border border-white/20">
+                <div className="mb-8 text-center">
+                    <h1 className="text-4xl font-bold text-slate-800 mb-2">Get Started</h1>
+                    <p className="text-slate-500">Create your account to start checking PMF</p>
+                </div>
+
+                {error && (
+                    <div className="p-4 mb-6 text-sm text-red-600 bg-red-50 border border-red-100 rounded-xl flex items-center animate-in fade-in slide-in-from-top-2">
+                        {error}
+                    </div>
+                )}
+
+                <form onSubmit={handleSignup} className="space-y-6">
+                    <div>
+                        <label className="block mb-2 text-sm font-medium text-slate-700" htmlFor="email">
                             Email
                         </label>
-                        <div className="relative">
-                            <span className="absolute inset-y-0 left-0 flex items-center pl-3">
+                        <div className="relative group">
+                            <span className="absolute inset-y-0 left-0 flex items-center pl-3 pointer-events-none transition-colors group-focus-within:text-emerald-500">
                                 <Mail className="w-5 h-5 text-gray-400" />
                             </span>
                             <input
                                 type="email"
                                 id="email"
-                                className="w-full pl-10 pr-3 py-2 border rounded-lg focus:outline-none focus:border-blue-500 text-gray-900"
-                                placeholder="Enter your email"
+                                className="w-full pl-10 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition-all text-slate-900 placeholder-slate-400"
+                                placeholder="name@company.com"
                                 value={email}
                                 onChange={(e) => setEmail(e.target.value)}
                                 required
                             />
                         </div>
                     </div>
-                    <div className="mb-6">
-                        <label className="block mb-2 text-sm font-bold text-gray-700" htmlFor="password">
+                    <div>
+                        <label className="block mb-2 text-sm font-medium text-slate-700" htmlFor="password">
                             Password
                         </label>
-                        <div className="relative">
-                            <span className="absolute inset-y-0 left-0 flex items-center pl-3">
+                        <div className="relative group">
+                            <span className="absolute inset-y-0 left-0 flex items-center pl-3 pointer-events-none transition-colors group-focus-within:text-emerald-500">
                                 <Lock className="w-5 h-5 text-gray-400" />
                             </span>
                             <input
                                 type="password"
                                 id="password"
-                                className="w-full pl-10 pr-3 py-2 border rounded-lg focus:outline-none focus:border-blue-500 text-gray-900"
-                                placeholder="Choose a password"
+                                className="w-full pl-10 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition-all text-slate-900 placeholder-slate-400"
+                                placeholder="Choose a strong password"
                                 value={password}
                                 onChange={(e) => setPassword(e.target.value)}
                                 required
@@ -70,15 +80,15 @@ export default function Signup() {
                     </div>
                     <button
                         type="submit"
-                        className="w-full px-4 py-2 font-bold text-white bg-green-500 rounded-lg hover:bg-green-600 focus:outline-none focus:shadow-outline"
+                        className="w-full px-4 py-3.5 text-sm font-bold text-white bg-emerald-600 rounded-xl hover:bg-emerald-700 focus:outline-none focus:ring-4 focus:ring-emerald-500/20 transition-all transform active:scale-[0.98] shadow-lg shadow-emerald-600/20"
                     >
-                        Sign Up
+                        Create Account
                     </button>
                 </form>
-                <p className="mt-4 text-center text-gray-600">
+                <p className="mt-8 text-center text-sm text-slate-600">
                     Already have an account?{' '}
-                    <Link to="/login" className="text-blue-500 hover:text-blue-700">
-                        Login
+                    <Link to="/login" className="font-semibold text-emerald-600 hover:text-emerald-500 transition-colors">
+                        Sign in
                     </Link>
                 </p>
             </div>

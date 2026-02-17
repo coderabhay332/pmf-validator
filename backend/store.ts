@@ -1,115 +1,156 @@
-
 import { Response } from 'express';
-import { TaskState, TaskStatus } from './types';
 
-export class TaskStore {
-    private tasks: Map<string, TaskState> = new Map();
-    private clients: Map<string, Response[]> = new Map();
+interface LogEntry {
+    timestamp: string;
+    type: string;
+    message: string;
+    data?: any;
+}
 
-    initTask(taskId: string) {
-        this.tasks.set(taskId, {
-            id: taskId,
-            status: 'INIT',
-            logs: [],
-            latestMessage: 'Task initialized',
-            createdAt: new Date(),
-            updatedAt: new Date()
-        });
+interface TaskData {
+    id: string;
+    status: string;
+    logs: LogEntry[];
+    clients: Response[];
+    latestMessage?: string;
+    result?: any;
+    error?: string;
+    createdAt: number;
+    updatedAt: number;
+}
+
+class TaskStore {
+    private tasks: Map<string, TaskData> = new Map();
+
+    initTask(taskId: string): void {
+        if (!this.tasks.has(taskId)) {
+            this.tasks.set(taskId, {
+                id: taskId,
+                status: 'PENDING',
+                logs: [],
+                clients: [],
+                createdAt: Date.now(),
+                updatedAt: Date.now()
+            });
+            console.log(`[Store] Initialized task ${taskId}`);
+        }
     }
 
-    getTask(taskId: string): TaskState | undefined {
+    getTask(taskId: string): TaskData | undefined {
         return this.tasks.get(taskId);
     }
 
-    getRunningTasks(): TaskState[] {
-        return Array.from(this.tasks.values()).filter(t => 
-            t.status === 'RUNNING' || t.status === 'PROCESSING' || t.status === 'STARTED' || t.status === 'INIT'
-        );
+    addLog(taskId: string, log: LogEntry): void {
+        const task = this.tasks.get(taskId);
+        if (!task) {
+            this.initTask(taskId);
+        }
+
+        const currentTask = this.tasks.get(taskId)!;
+        currentTask.logs.push(log);
+        currentTask.updatedAt = Date.now();
+
+        // Broadcast to all connected clients
+        this.broadcast(taskId, {
+            type: 'log',
+            data: log
+        });
+
+        console.log(`[Store] Added log to ${taskId}: ${log.message.substring(0, 50)}...`);
     }
 
-    updateTask(taskId: string, updates: Partial<TaskState>) {
+    updateTask(taskId: string, updates: Partial<Omit<TaskData, 'id' | 'clients'>>): void {
         const task = this.tasks.get(taskId);
-        if (task) {
-            Object.assign(task, updates);
-            task.updatedAt = new Date();
-            this.tasks.set(taskId, task); // Not strictly needed for object reference but good for clarity
+        if (!task) {
+            this.initTask(taskId);
+        }
 
-            // Notify clients
-            this.notifyClients(taskId, task);
+        const currentTask = this.tasks.get(taskId)!;
+        Object.assign(currentTask, updates, { updatedAt: Date.now() });
 
-            // Cleanup on completion
-            if (updates.status === 'DONE' || updates.status === 'ERROR') {
-                // Clean up clients after sending the final message
-                setTimeout(() => this.cleanup(taskId), 5000);
+        // Broadcast update to all clients
+        this.broadcast(taskId, {
+            type: 'update',
+            data: {
+                status: currentTask.status,
+                latestMessage: currentTask.latestMessage,
+                result: currentTask.result,
+                error: currentTask.error,
+                updatedAt: currentTask.updatedAt
+            }
+        });
+
+        console.log(`[Store] Updated task ${taskId}:`, updates.status || updates.latestMessage);
+
+        // If task is finished, close all clients
+        if (['DONE', 'ERROR', 'FINISHED', 'COMPLETED', 'FAILED'].includes(updates.status?.toUpperCase() || '')) {
+            const task = this.tasks.get(taskId);
+            if (task) {
+                console.log(`[Store] Closing ${task.clients.length} clients for finished task ${taskId}`);
+                task.clients.forEach(client => {
+                    try {
+                        client.end();
+                    } catch (e) {
+                        console.error(`Error closing client for ${taskId}`, e);
+                    }
+                });
+                task.clients = [];
             }
         }
     }
 
-    addClient(taskId: string, res: Response) {
-        if (!this.clients.has(taskId)) {
-            this.clients.set(taskId, []);
+    addClient(taskId: string, res: Response): void {
+        const task = this.tasks.get(taskId);
+        if (!task) {
+            this.initTask(taskId);
         }
-        this.clients.get(taskId)?.push(res);
+        this.tasks.get(taskId)!.clients.push(res);
+        console.log(`[Store] Client added to ${taskId}. Total clients: ${this.tasks.get(taskId)!.clients.length}`);
+    }
 
-        // Send current state
+    removeClient(taskId: string, res: Response): void {
         const task = this.tasks.get(taskId);
         if (task) {
-            const data = JSON.stringify({ type: 'status', data: { step: task.status, message: task.latestMessage } });
-            res.write(`data: ${data}\n\n`);
-        }
-    }
+            task.clients = task.clients.filter(client => client !== res);
+            console.log(`[Store] Client removed from ${taskId}. Total clients: ${task.clients.length}`);
 
-    removeClient(taskId: string, res: Response) {
-        const waiting = this.clients.get(taskId);
-        if (waiting) {
-            this.clients.set(taskId, waiting.filter(c => c !== res));
-        }
-    }
-
-    appendLogs(taskId: string, newLogs: any[]) {
-        const task = this.tasks.get(taskId);
-        if (task) {
-            task.logs = [...task.logs, ...newLogs];
-            task.updatedAt = new Date();
-            this.notifyClients(taskId, task, 'log', newLogs);
-        }
-    }
-
-    private notifyClients(taskId: string, task: TaskState, explicitType?: string, explicitData?: any) {
-        const waiting = this.clients.get(taskId);
-        if (waiting) {
-            waiting.forEach(client => {
-                let eventType = explicitType || 'status';
-                let payload: any = explicitData;
-
-                if (!explicitType) {
-                    payload = { step: task.status, message: task.latestMessage };
-                    if (task.status === 'DONE' && task.result) {
-                        eventType = 'done';
-                        payload = task.result;
-                    } else if (task.status === 'ERROR') {
-                        eventType = 'error';
-                        payload = task.error;
+            // Cleanup if no clients and task is done
+            if (task.clients.length === 0 && (task.status === 'DONE' || task.status === 'ERROR')) {
+                setTimeout(() => {
+                    if (this.tasks.get(taskId)?.clients.length === 0) {
+                        this.tasks.delete(taskId);
+                        console.log(`[Store] Cleaned up completed task ${taskId}`);
                     }
-                }
-
-                client.write(`data: ${JSON.stringify({ type: eventType, data: payload })}\n\n`);
-            });
+                }, 60000); // Keep for 1 minute after last client disconnects
+            }
         }
     }
 
-    private cleanup(taskId: string) {
-        // Close connections
-        const waiting = this.clients.get(taskId);
-        if (waiting) {
-            waiting.forEach(res => res.end());
-            this.clients.delete(taskId);
+    broadcast(taskId: string, message: any): void {
+        const task = this.tasks.get(taskId);
+        if (!task || task.clients.length === 0) return;
+
+        const data = `data: ${JSON.stringify(message)}\n\n`;
+        const deadClients: Response[] = [];
+
+        task.clients.forEach(client => {
+            try {
+                client.write(data);
+                if ((client as any).flush) (client as any).flush();
+            } catch (error) {
+                console.error(`[Store] Failed to send to client, marking for removal`);
+                deadClients.push(client);
+            }
+        });
+
+        // Remove dead clients
+        if (deadClients.length > 0) {
+            task.clients = task.clients.filter(c => !deadClients.includes(c));
         }
-        // Optional: delete task from memory after a delay
-        setTimeout(() => {
-            this.tasks.delete(taskId);
-            console.log(`Cleaned up task ${taskId}`);
-        }, 1000 * 60 * 5); // 5 mins
+    }
+
+    getAllTasks(): TaskData[] {
+        return Array.from(this.tasks.values());
     }
 }
 

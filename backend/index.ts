@@ -1,4 +1,3 @@
-
 import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
@@ -6,7 +5,7 @@ import jwt from 'jsonwebtoken';
 import { BrowserUseClient } from './client';
 import { store } from './store';
 import { mapWebhookStatus, extractResult, verifySecret } from './utils';
-import { WebhookPayload, CreateTaskRequest } from './types';
+import { WebhookPayload, CreateTaskRequest, TaskStatus, TaskState } from './types';
 import { connectDB } from './db';
 import User from './models/User';
 import TaskModel from './models/Task';
@@ -37,39 +36,6 @@ const generateToken = (id: string) => {
 // AUTH ROUTES
 // ---------------------------------------------------------------------
 
-// POST /api/auth/signup
-/**
- * @swagger
- * /api/auth/signup:
- *   post:
- *     summary: Register a new user
- *     tags: [Auth]
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             required:
- *               - email
- *               - password
- *             properties:
- *               email:
- *                 type: string
- *               password:
- *                 type: string
- *     responses:
- *       201:
- *         description: User created successfully
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/User'
- *       400:
- *         description: User already exists
- *       500:
- *         description: Server error
- */
 app.post('/api/auth/signup', async (req, res) => {
     try {
         const { email, password } = req.body;
@@ -95,39 +61,6 @@ app.post('/api/auth/signup', async (req, res) => {
     }
 });
 
-// POST /api/auth/login
-/**
- * @swagger
- * /api/auth/login:
- *   post:
- *     summary: Login a user
- *     tags: [Auth]
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             required:
- *               - email
- *               - password
- *             properties:
- *               email:
- *                 type: string
- *               password:
- *                 type: string
- *     responses:
- *       200:
- *         description: Login successful
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/User'
- *       401:
- *         description: Invalid credentials
- *       500:
- *         description: Server error
- */
 app.post('/api/auth/login', async (req, res) => {
     try {
         const { email, password } = req.body;
@@ -151,48 +84,6 @@ app.post('/api/auth/login', async (req, res) => {
 // TASK ROUTES (Protected)
 // ---------------------------------------------------------------------
 
-/**
- * POST /api/tasks
- * Create Task
- * @swagger
- * /api/tasks:
- *   post:
- *     summary: Create a new task
- *     tags: [Tasks]
- *     security:
- *       - bearerAuth: []
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             required:
- *               - taskPrompt
- *             properties:
- *               taskPrompt:
- *                 type: string
- *     responses:
- *       200:
- *         description: Task created successfully
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 taskId:
- *                   type: string
- *                 dbId:
- *                   type: string
- *                 status:
- *                   type: string
- *       400:
- *         description: Bad request
- *       401:
- *         description: Unauthorized
- *       500:
- *         description: Server error
- */
 app.post('/api/tasks', protect, async (req, res) => {
     try {
         const { taskPrompt } = req.body as CreateTaskRequest;
@@ -203,7 +94,58 @@ app.post('/api/tasks', protect, async (req, res) => {
         }
 
         console.log(`Creating task: "${taskPrompt.substring(0, 50)}..."`);
-        const browserTask = await client.createTask(taskPrompt, webhookUrl);
+
+        const systemInstruction = `
+IMPORTANT RESPONSE FORMAT INSTRUCTION:
+You are a Product Market Fit Analyst. You must return your final analysis in strictly VALID JSON format.
+Do not include any conversational text, markdown formatting (like \`\`\`json), or explanations outside the JSON object. 
+The Output must be a single JSON object matching this exact structure:
+
+{
+  "product": "Product Name",
+  "category": "Category Name",
+  "date": "Date",
+  "recommendation": "SHIP" | "PIVOT" | "KILL",
+  "oneLineVerdict": "Brief verdict",
+  "keyInsight": "Key insight",
+  "scores": {
+    "productMaturity": 0-10,
+    "pmfReadiness": 0-10,
+    "technicalQuality": 0-10,
+    "marketOpportunity": 0-10,
+    "viability": 0-10
+  },
+  "sections": {
+    "productOverview": {
+      "summary": "...",
+      "features": [{ "name": "...", "status": "Works Well" | "Partially Works" | "Broken/Missing" }]
+    },
+    "marketAnalysis": {
+      "summary": "...",
+      "competitors": [{ "name": "...", "differentiator": "...", "pricing": "..." }]
+    },
+    "pricing": { "model": "...", "analysis": "..." },
+    "ux": { "summary": "...", "audit": ["..."] },
+    "technical": { "summary": "...", "stackAnalysis": "..." },
+    "value": { "proposition": "...", "delivery": "..." },
+    "willingness": { "summary": "...", "evidence": "..." },
+    "growth": { "channels": ["..."], "strategy": "..." },
+    "pmfDiagnosis": {
+      "signals": [{ "label": "...", "met": boolean }], 
+      "score": 0-7,
+      "verdict": "..."
+    },
+    "blindSpots": { "risks": ["..."], "mitigation": "..." },
+    "fixes": [{ "title": "...", "severity": "Critical" | "High" | "Medium", "impact": "...", "plan": "...", "timeline": "..." }],
+    "finalRecommendation": { "reasoning": "...", "nextSteps": ["..."] }
+  }
+}
+Perform the analysis requested by the user and populate this JSON.
+`;
+
+        const finalPrompt = `${taskPrompt}\n\n${systemInstruction}`;
+
+        const browserTask = await client.createTask(finalPrompt, webhookUrl);
         const taskId = browserTask.task_id || browserTask.id;
 
         if (!taskId) {
@@ -219,11 +161,14 @@ app.post('/api/tasks', protect, async (req, res) => {
             logs: [],
         });
 
-        // Initialize in-memory store for real-time streaming
+        // Initialize in-memory store for real-time SSE
         store.initTask(taskId);
 
+        // Start streaming logs in background
+        startLogStreaming(taskId);
+
         res.json({
-            taskId, // We return browserUseId for consistency with streaming/webhooks logic
+            taskId,
             dbId: newTask._id,
             status: "STARTED"
         });
@@ -234,30 +179,6 @@ app.post('/api/tasks', protect, async (req, res) => {
     }
 });
 
-/**
- * GET /api/tasks
- * List User Tasks
- * @swagger
- * /api/tasks:
- *   get:
- *     summary: List all tasks for the authenticated user
- *     tags: [Tasks]
- *     security:
- *       - bearerAuth: []
- *     responses:
- *       200:
- *         description: List of tasks
- *         content:
- *           application/json:
- *             schema:
- *               type: array
- *               items:
- *                 $ref: '#/components/schemas/Task'
- *       401:
- *         description: Unauthorized
- *       500:
- *         description: Server error
- */
 app.get('/api/tasks', protect, async (req, res) => {
     try {
         const tasks = await TaskModel.find({ user: req.user._id }).sort({ createdAt: -1 });
@@ -267,37 +188,6 @@ app.get('/api/tasks', protect, async (req, res) => {
     }
 });
 
-/**
- * GET /api/tasks/:taskId
- * Get Single Task
- * @swagger
- * /api/tasks/{id}:
- *   get:
- *     summary: Get a task by ID (DB ID or BrowserUse ID)
- *     tags: [Tasks]
- *     security:
- *       - bearerAuth: []
- *     parameters:
- *       - in: path
- *         name: id
- *         required: true
- *         schema:
- *           type: string
- *         description: The task ID
- *     responses:
- *       200:
- *         description: Task details
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/Task'
- *       404:
- *         description: Task not found
- *       401:
- *         description: Unauthorized
- *       500:
- *         description: Server error
- */
 app.get('/api/tasks/:id', protect, async (req, res) => {
     try {
         const id = req.params.id as string;
@@ -321,6 +211,63 @@ app.get('/api/tasks/:id', protect, async (req, res) => {
     }
 });
 
+// ---------------------------------------------------------------------
+// BACKGROUND LOG STREAMING
+// ---------------------------------------------------------------------
+
+async function startLogStreaming(taskId: string) {
+    try {
+        console.log(`Starting log stream for task ${taskId}`);
+
+        // Use Browser Use's stream() method for real-time updates
+        const stream = client.streamTask(taskId);
+
+        for await (const update of stream) {
+            const logEntry = {
+                timestamp: new Date().toISOString(),
+                type: update.type || 'step',
+                message: update.message || update.thought || JSON.stringify(update),
+                data: update
+            };
+
+            // Add to store and broadcast to all connected clients
+            store.addLog(taskId, logEntry);
+
+            // Update task status if provided
+            // Update task status if provided
+            if (update.status) {
+                const status = update.status.toUpperCase();
+
+                // If it's a terminal status, finalize the task
+                if (['DONE', 'COMPLETED', 'FINISHED', 'FAILED', 'STOPPED'].includes(status)) {
+                    console.log(`Stream detected completion with status ${status}, finalizing...`);
+                    await finalizeTask(taskId);
+                    return; // Stop streaming
+                }
+
+                store.updateTask(taskId, {
+                    status: update.status,
+                    latestMessage: update.message || update.thought
+                });
+
+                // Persist status change to DB
+                await TaskModel.findOneAndUpdate(
+                    { browserUseId: taskId },
+                    { status: update.status }
+                ).catch(err => console.error("Failed to update task status in DB:", err));
+            }
+        }
+
+        console.log(`Log stream ended for task ${taskId}`);
+    } catch (error) {
+        console.error(`Log streaming error for ${taskId}:`, error);
+        store.updateTask(taskId, {
+            status: 'ERROR',
+            error: 'Log streaming failed',
+            latestMessage: 'Failed to stream logs'
+        });
+    }
+}
 
 // ---------------------------------------------------------------------
 // WEBHOOK RECEIVER
@@ -337,7 +284,7 @@ app.post('/api/webhooks/browser-use', verifySecret, async (req, res) => {
         }
 
         if (type === 'agent.task.status_update' && payload) {
-            const { task_id, status } = payload;
+            const { task_id, status, logs: webhookLogs } = payload;
 
             if (!task_id) {
                 return res.status(400).send('Missing task_id');
@@ -345,80 +292,57 @@ app.post('/api/webhooks/browser-use', verifySecret, async (req, res) => {
 
             console.log(`Webhook received for ${task_id}: ${type} (${status})`);
 
+            // Ensure store entry exists
+            if (!store.getTask(task_id)) {
+                store.initTask(task_id);
+            }
+
             const backendStatus = mapWebhookStatus(type, status);
 
-            // Update In-Memory Store (for SSE)
+            // Process webhook logs if provided
+            if (webhookLogs && Array.isArray(webhookLogs)) {
+                webhookLogs.forEach((log: any) => {
+                    store.addLog(task_id, {
+                        timestamp: new Date().toISOString(),
+                        type: 'webhook',
+                        message: log.message || JSON.stringify(log),
+                        data: log
+                    });
+                });
+            }
+
+            // Update In-Memory Store
             const updatePayload: any = {
                 status: backendStatus,
-                latestMessage: `Event: ${type} - ${status}`
+                latestMessage: `Event: ${type} - ${status}`,
+                lastWebhookAt: new Date().toISOString()
             };
 
             store.updateTask(task_id, updatePayload);
 
             // Update Database
-            const dbUpdate: any = { status: backendStatus };
-
-            // Find task in DB
-            let task = await TaskModel.findOne({ browserUseId: task_id });
-            if (task) {
-                Object.assign(task, dbUpdate);
-                await task.save();
+            try {
+                await TaskModel.findOneAndUpdate(
+                    { browserUseId: task_id },
+                    {
+                        status: backendStatus,
+                        $push: {
+                            activityLog: {
+                                type: 'status_change',
+                                status: backendStatus,
+                                timestamp: new Date()
+                            }
+                        }
+                    },
+                    { upsert: true }
+                );
+            } catch (dbError) {
+                console.error('DB update failed:', dbError);
             }
 
             // Handle Finalization
-            if (backendStatus === 'FINALIZING') {
-                (async () => {
-                    try {
-                        console.log(`Fetching logs for finalizing task ${task_id}...`);
-                        const logs = await client.getTaskLogs(task_id);
-
-                        // Also get the full task details just in case output is there
-                        const taskDetails = await client.getTask(task_id);
-
-                        console.log('Task Details:', JSON.stringify(taskDetails, null, 2));
-                        console.log('Task Logs:', JSON.stringify(logs, null, 2));
-
-                        const result = extractResult(taskDetails, logs); // Pass taskDetails first as it might have 'output'
-
-                        console.log('Extracted Result:', JSON.stringify(result, null, 2));
-
-                        // Helper to update both DB and Store
-                        const finalUpdate: any = {
-                            status: 'DONE',
-                            latestMessage: 'Task completed successfully',
-                            result: result || undefined,
-                            logs: logs // Optional: save all logs to DB? It might be large.
-                        };
-
-                        if (!result) {
-                            finalUpdate.status = 'ERROR';
-                            finalUpdate.error = 'Failed to extract valid result';
-                        }
-
-                        store.updateTask(task_id, finalUpdate);
-
-                        if (task) {
-                            task.status = finalUpdate.status;
-                            task.result = finalUpdate.result;
-                            task.logs = logs; // Save logs to DB if needed
-                            await task.save();
-                            console.log('Task saved to DB with result:', task.result ? 'YES' : 'NO');
-                        }
-
-                    } catch (err: any) {
-                        console.error(`Failed to fetch logs/result for ${task_id}:`, err);
-                        store.updateTask(task_id, {
-                            status: 'ERROR',
-                            error: err.message,
-                            latestMessage: 'Failed to fetch final result'
-                        });
-                        if (task) {
-                            task.status = 'ERROR';
-                            // task.error = err.message; // Add error field to schema if needed
-                            await task.save();
-                        }
-                    }
-                })();
+            if (backendStatus === 'FINALIZING' || status === 'completed' || status === 'finished') {
+                finalizeTask(task_id);
             }
         }
 
@@ -429,115 +353,168 @@ app.post('/api/webhooks/browser-use', verifySecret, async (req, res) => {
     }
 });
 
-// ---------------------------------------------------------------------
-// SSE STREAM ENDPOINT (Public/Protected?)
-// ---------------------------------------------------------------------
-// Note: SSE difficult to auth with headers in EventSource. 
-// Often passed via query param ?token=... or unprotected if taskId is secret enough.
-// For now, leaving unprotected by Auth Middleware, but logic remains same.
-// User can access stream if they know taskId.
+async function finalizeTask(taskId: string) {
+    try {
+        console.log(`Finalizing task ${taskId}...`);
 
-app.get('/api/tasks/:taskId/stream', (req, res) => {
+        const [taskDetails, logs] = await Promise.all([
+            client.getTask(taskId),
+            client.getTaskLogs(taskId)
+        ]);
+
+        const result = extractResult(taskDetails, logs);
+
+        console.log('Extracted Result:', JSON.stringify(result, null, 2));
+
+        const finalUpdate: any = {
+            status: result ? 'DONE' : 'ERROR',
+            latestMessage: result ? 'Task completed successfully' : 'Failed to extract valid result',
+            result: result || undefined,
+            error: result ? undefined : 'Failed to extract valid result',
+            logs: logs,
+            completedAt: new Date().toISOString()
+        };
+
+        // Add completion log
+        store.addLog(taskId, {
+            timestamp: new Date().toISOString(),
+            type: 'completion',
+            message: result?.output ? `Task Completed. Output:\n${result.output}` : finalUpdate.latestMessage,
+            data: { result }
+        });
+
+        if (result?.output) {
+            console.log("\n---------------------------------------------------");
+            console.log("🎉 Task Completed Successfully!");
+            console.log("---------------------------------------------------");
+            console.log(result.output);
+            console.log("---------------------------------------------------\n");
+        }
+
+        store.updateTask(taskId, finalUpdate);
+
+        await TaskModel.findOneAndUpdate(
+            { browserUseId: taskId },
+            {
+                status: finalUpdate.status,
+                result: finalUpdate.result,
+                logs: logs,
+                completedAt: new Date()
+            }
+        );
+
+        console.log(`Task ${taskId} finalized with status: ${finalUpdate.status}`);
+    } catch (err: any) {
+        console.error(`Finalization failed for ${taskId}:`, err);
+        store.updateTask(taskId, {
+            status: 'ERROR',
+            error: err.message,
+            latestMessage: 'Failed to fetch final result'
+        });
+
+        await TaskModel.findOneAndUpdate(
+            { browserUseId: taskId },
+            { status: 'ERROR', error: err.message }
+        );
+    }
+}
+
+// ---------------------------------------------------------------------
+// SSE STREAM ENDPOINT
+// ---------------------------------------------------------------------
+
+app.get('/api/tasks/:taskId/stream', async (req, res) => {
     const { taskId } = req.params;
 
-    // Headers for SSE
+    // Set SSE headers
     res.writeHead(200, {
         'Content-Type': 'text/event-stream',
         'Cache-Control': 'no-cache',
-        'Connection': 'keep-alive'
+        'Connection': 'keep-alive',
+        'X-Accel-Buffering': 'no' // Disable nginx buffering
     });
 
-    const task = store.getTask(taskId);
-    if (!task) {
-        // Just keep open to wait for it? Or close?
-        // If we just created it, it should be there.
-        res.write(`data: ${JSON.stringify({ type: 'status', data: { step: 'INIT', message: 'Waiting for task initialization...' } })}\n\n`);
+    console.log(`Client connected to stream for ${taskId}`);
+
+    // Initialize task in store if not exists
+    if (!store.getTask(taskId)) {
+        store.initTask(taskId);
+
+        // Hydrate from DB
+        try {
+            const dbTask = await TaskModel.findOne({ browserUseId: taskId });
+            if (dbTask) {
+                store.updateTask(taskId, {
+                    status: dbTask.status,
+                    logs: dbTask.logs || [],
+                    result: dbTask.result
+                });
+                console.log(`[Stream] Hydrated task ${taskId} from DB. Status: ${dbTask.status}`);
+            }
+        } catch (e) {
+            console.error("Failed to hydrate task from DB:", e);
+        }
     }
 
-    console.log(`Client connected to stream for ${taskId}`);
+    const task = store.getTask(taskId);
+
+    // Send initial state immediately
+    res.write(`data: ${JSON.stringify({
+        type: 'init',
+        data: {
+            taskId,
+            status: task?.status || 'PENDING',
+            logs: task?.logs || [],
+            message: 'Connected to real-time stream'
+        }
+    })}\n\n`);
+
+    if ((res as any).flush) (res as any).flush();
+
+    // If task is already done, close the connection immediately
+    if (task && ['DONE', 'ERROR', 'FAILED', 'COMPLETED', 'STOPPED', 'FINISHED'].includes(task.status?.toUpperCase())) {
+        console.log(`Task ${taskId} is already ${task.status}, closing stream immediately.`);
+        res.end();
+        return;
+    }
+
+    // Add client to store
     store.addClient(taskId, res);
+
+    // Send any existing logs immediately
+    if (task?.logs && task.logs.length > 0) {
+        res.write(`data: ${JSON.stringify({
+            type: 'logs',
+            data: task.logs
+        })}\n\n`);
+        if ((res as any).flush) (res as any).flush();
+    }
+
+    // Keep-alive ping every 30 seconds
+    const keepAlive = setInterval(() => {
+        try {
+            res.write(`:ping\n\n`);
+            if ((res as any).flush) (res as any).flush();
+        } catch (e) {
+            clearInterval(keepAlive);
+        }
+    }, 30000);
 
     req.on('close', () => {
         console.log(`Client disconnected from ${taskId}`);
+        clearInterval(keepAlive);
+        store.removeClient(taskId, res);
+    });
+
+    req.on('error', (err) => {
+        console.error(`SSE error for ${taskId}:`, err);
+        clearInterval(keepAlive);
         store.removeClient(taskId, res);
     });
 });
 
 app.listen(PORT, () => {
     console.log(`Backend running on port ${PORT}`);
-
-    // Poll for logs and status every 2 seconds
-    setInterval(async () => {
-        const runningTasks = store.getRunningTasks();
-        for (const task of runningTasks) {
-            try {
-                // Poll task status from Browser Use API
-                const taskDetails = await client.getTask(task.id);
-                console.log(`Polling task ${task.id}: status = ${taskDetails.status}`);
-
-                // Check if task has finished
-                if (taskDetails.status === 'finished' || taskDetails.status === 'completed' || taskDetails.status === 'done') {
-                    // Task completed! Trigger finalization logic
-                    console.log(`Task ${task.id} completed! Fetching logs and extracting result...`);
-
-                    const logs = await client.getTaskLogs(task.id);
-                    console.log('Task Details:', JSON.stringify(taskDetails, null, 2));
-                    console.log('Task Logs:', JSON.stringify(logs, null, 2));
-
-                    const result = extractResult(taskDetails, logs);
-                    console.log('Extracted Result:', JSON.stringify(result, null, 2));
-
-                    const finalUpdate: any = {
-                        status: 'DONE',
-                        latestMessage: 'Task completed successfully',
-                        result: result || undefined,
-                        logs: logs
-                    };
-
-                    if (!result) {
-                        finalUpdate.status = 'ERROR';
-                        finalUpdate.error = 'Failed to extract valid result';
-                    }
-
-                    store.updateTask(task.id, finalUpdate);
-
-                    // Update DB
-                    const dbTask = await TaskModel.findOne({ browserUseId: task.id });
-                    if (dbTask) {
-                        dbTask.status = finalUpdate.status;
-                        dbTask.result = finalUpdate.result;
-                        dbTask.logs = logs;
-                        await dbTask.save();
-                        console.log('Task saved to DB with result:', dbTask.result ? 'YES' : 'NO');
-                    }
-                } else if (taskDetails.status === 'failed' || taskDetails.status === 'error') {
-                    // Task failed
-                    console.log(`Task ${task.id} failed!`);
-                    store.updateTask(task.id, {
-                        status: 'ERROR',
-                        latestMessage: 'Task failed',
-                        error: 'Task reported as failed by Browser Use API'
-                    });
-
-                    const dbTask = await TaskModel.findOne({ browserUseId: task.id });
-                    if (dbTask) {
-                        dbTask.status = 'ERROR';
-                        await dbTask.save();
-                    }
-                } else {
-                    // Task still running - poll for logs
-                    const logs = await client.getTaskLogs(task.id);
-
-                    if (Array.isArray(logs) && logs.length > task.logs.length) {
-                        const newLogs = logs.slice(task.logs.length);
-                        if (newLogs.length > 0) {
-                            store.appendLogs(task.id, newLogs);
-                        }
-                    }
-                }
-            } catch (error) {
-                console.error(`Failed to poll task ${task.id}:`, error);
-            }
-        }
-    }, 2000);
+    console.log(`Webhook URL: ${process.env.PUBLIC_WEBHOOK_URL || `http://localhost:${PORT}/api/webhooks/browser-use`}`);
+    console.log(`Real-time streaming enabled`);
 });
